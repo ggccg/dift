@@ -1,27 +1,25 @@
-from diffusers import StableDiffusionPipeline
-import torch
-import torch.nn as nn
-import matplotlib.pyplot as plt
-import numpy as np
-from typing import Any, Callable, Dict, List, Optional, Union
-from diffusers.models.unet_2d_condition import UNet2DConditionModel
-from diffusers import DDIMScheduler
 import gc
-import os
-from PIL import Image
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import numpy as np
+import torch
+from diffusers import DDIMScheduler
+from diffusers import StableDiffusionPipeline
+from diffusers.models.unet_2d_condition import UNet2DConditionModel
 from torchvision.transforms import PILToTensor
+
 
 class MyUNet2DConditionModel(UNet2DConditionModel):
     def forward(
-        self,
-        sample: torch.FloatTensor,
-        timestep: Union[torch.Tensor, float, int],
-        up_ft_indices,
-        encoder_hidden_states: torch.Tensor,
-        class_labels: Optional[torch.Tensor] = None,
-        timestep_cond: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        cross_attention_kwargs: Optional[Dict[str, Any]] = None):
+            self,
+            sample: torch.FloatTensor,
+            timestep: Union[torch.Tensor, float, int],
+            up_ft_indices,
+            encoder_hidden_states: torch.Tensor,
+            class_labels: Optional[torch.Tensor] = None,
+            timestep_cond: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            cross_attention_kwargs: Optional[Dict[str, Any]] = None):
         r"""
         Args:
             sample (`torch.FloatTensor`): (batch, channel, height, width) noisy inputs tensor
@@ -36,7 +34,7 @@ class MyUNet2DConditionModel(UNet2DConditionModel):
         # The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
         # However, the upsampling interpolation output size can be forced to fit any upsampling size
         # on the fly if necessary.
-        default_overall_up_factor = 2**self.num_upsamplers
+        default_overall_up_factor = 2 ** self.num_upsamplers
 
         # upsample size should be forwarded when sample is not a multiple of `default_overall_up_factor`
         forward_upsample_size = False
@@ -129,7 +127,7 @@ class MyUNet2DConditionModel(UNet2DConditionModel):
 
             is_final_block = i == len(self.up_blocks) - 1
 
-            res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
+            res_samples = down_block_res_samples[-len(upsample_block.resnets):]
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             # if we have not reached the final block and need to forward the
@@ -159,31 +157,31 @@ class MyUNet2DConditionModel(UNet2DConditionModel):
         output['up_ft'] = up_ft
         return output
 
+
 class OneStepSDPipeline(StableDiffusionPipeline):
     @torch.no_grad()
     def __call__(
-        self,
-        img_tensor,
-        t,
-        up_ft_indices,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-        callback_steps: int = 1,
-        cross_attention_kwargs: Optional[Dict[str, Any]] = None
+            self,
+            img_tensor,
+            t,
+            up_ft_indices,
+            negative_prompt: Optional[Union[str, List[str]]] = None,
+            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+            prompt_embeds: Optional[torch.FloatTensor] = None,
+            callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
+            callback_steps: int = 1,
+            cross_attention_kwargs: Optional[Dict[str, Any]] = None
     ):
-
         device = self._execution_device
         latents = self.vae.encode(img_tensor).latent_dist.sample() * self.vae.config.scaling_factor
         t = torch.tensor(t, dtype=torch.long, device=device)
         noise = torch.randn_like(latents).to(device)
         latents_noisy = self.scheduler.add_noise(latents, noise, t)
         unet_output = self.unet(latents_noisy,
-                               t,
-                               up_ft_indices,
-                               encoder_hidden_states=prompt_embeds,
-                               cross_attention_kwargs=cross_attention_kwargs)
+                                t,
+                                up_ft_indices,
+                                encoder_hidden_states=prompt_embeds,
+                                cross_attention_kwargs=cross_attention_kwargs)
         return unet_output
 
 
@@ -197,11 +195,11 @@ class SDFeaturizer:
         onestep_pipe = onestep_pipe.to("cuda")
         onestep_pipe.enable_attention_slicing()
         onestep_pipe.enable_xformers_memory_efficient_attention()
-        null_prompt_embeds = onestep_pipe._encode_prompt(
+        null_prompt_embeds, _ = onestep_pipe.encode_prompt(
             prompt=null_prompt,
             device='cuda',
             num_images_per_prompt=1,
-            do_classifier_free_guidance=False) # [1, 77, dim]
+            do_classifier_free_guidance=False)  # [1, 77, dim]
 
         self.null_prompt_embeds = null_prompt_embeds
         self.null_prompt = null_prompt
@@ -224,23 +222,23 @@ class SDFeaturizer:
         Return:
             unet_ft: a torch tensor in the shape of [1, c, h, w]
         '''
-        img_tensor = img_tensor.repeat(ensemble_size, 1, 1, 1).cuda() # ensem, c, h, w
+        img_tensor = img_tensor.repeat(ensemble_size, 1, 1, 1).cuda()  # ensem, c, h, w
         if prompt == self.null_prompt:
             prompt_embeds = self.null_prompt_embeds
         else:
-            prompt_embeds = self.pipe._encode_prompt(
+            prompt_embeds, _ = self.pipe.encode_prompt(
                 prompt=prompt,
                 device='cuda',
                 num_images_per_prompt=1,
-                do_classifier_free_guidance=False) # [1, 77, dim]
+                do_classifier_free_guidance=False)  # [1, 77, dim]
         prompt_embeds = prompt_embeds.repeat(ensemble_size, 1, 1)
         unet_ft_all = self.pipe(
             img_tensor=img_tensor,
             t=t,
             up_ft_indices=[up_ft_index],
             prompt_embeds=prompt_embeds)
-        unet_ft = unet_ft_all['up_ft'][up_ft_index] # ensem, c, h, w
-        unet_ft = unet_ft.mean(0, keepdim=True) # 1,c,h,w
+        unet_ft = unet_ft_all['up_ft'][up_ft_index]  # ensem, c, h, w
+        unet_ft = unet_ft.mean(0, keepdim=True)  # 1,c,h,w
         return unet_ft
 
 
@@ -255,7 +253,7 @@ class SDFeaturizer4Eval(SDFeaturizer):
                     prompt=prompt,
                     device='cuda',
                     num_images_per_prompt=1,
-                    do_classifier_free_guidance=False) # [1, 77, dim]
+                    do_classifier_free_guidance=False)  # [1, 77, dim]
                 cat2prompt_embeds[cat] = prompt_embeds
             self.cat2prompt_embeds = cat2prompt_embeds
 
@@ -263,7 +261,6 @@ class SDFeaturizer4Eval(SDFeaturizer):
         self.pipe.text_encoder = None
         gc.collect()
         torch.cuda.empty_cache()
-
 
     @torch.no_grad()
     def forward(self,
@@ -276,7 +273,7 @@ class SDFeaturizer4Eval(SDFeaturizer):
         if img_size is not None:
             img = img.resize(img_size)
         img_tensor = (PILToTensor()(img) / 255.0 - 0.5) * 2
-        img_tensor = img_tensor.unsqueeze(0).repeat(ensemble_size, 1, 1, 1).cuda() # ensem, c, h, w
+        img_tensor = img_tensor.unsqueeze(0).repeat(ensemble_size, 1, 1, 1).cuda()  # ensem, c, h, w
         if category in self.cat2prompt_embeds:
             prompt_embeds = self.cat2prompt_embeds[category]
         else:
@@ -287,6 +284,6 @@ class SDFeaturizer4Eval(SDFeaturizer):
             t=t,
             up_ft_indices=[up_ft_index],
             prompt_embeds=prompt_embeds)
-        unet_ft = unet_ft_all['up_ft'][up_ft_index] # ensem, c, h, w
-        unet_ft = unet_ft.mean(0, keepdim=True) # 1,c,h,w
+        unet_ft = unet_ft_all['up_ft'][up_ft_index]  # ensem, c, h, w
+        unet_ft = unet_ft.mean(0, keepdim=True)  # 1,c,h,w
         return unet_ft
